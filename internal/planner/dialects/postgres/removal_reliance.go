@@ -142,7 +142,7 @@ func (p *Planner) routinesAheadOf(diff *difftypes.SchemaDiff, rebuild viewRebuil
 	for _, object := range rebuild.dropped() {
 		dropped = append(dropped, object.Name)
 	}
-	dropped = append(dropped, modifiedViewPaths(diff).dropped...)
+	dropped = append(dropped, namesOf(modifiedViewPaths(diff).dropped)...)
 	for _, routines := range []difftypes.FunctionChanges{diff.FunctionsRemoved, diff.ProceduresRemoved} {
 		for _, routine := range routines {
 			var named []string
@@ -290,11 +290,14 @@ func removedRoutineMatches(diff *difftypes.SchemaDiff, match func(difftypes.Rout
 // routine is created and records what it reads; a body in quotes is a string it
 // records nothing for.
 func sqlStandardBodyReads(body, relation, schema string) bool {
+	return sqlStandardBody(body) && deporder.ReferencesRelation(body, relation, schema)
+}
+
+// sqlStandardBody reports whether body is a SQL-standard routine body,
+// `BEGIN ATOMIC ... END` or `RETURN expression`, rather than a string.
+func sqlStandardBody(body string) bool {
 	head := strings.ToUpper(strings.Join(strings.Fields(body), " "))
-	if !strings.HasPrefix(head, "BEGIN ATOMIC") && !strings.HasPrefix(head, "RETURN ") {
-		return false
-	}
-	return deporder.ReferencesRelation(body, relation, schema)
+	return strings.HasPrefix(head, "BEGIN ATOMIC") || strings.HasPrefix(head, "RETURN ")
 }
 
 // removedTableReads reports whether a captured object of a table the plan
