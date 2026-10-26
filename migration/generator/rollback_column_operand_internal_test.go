@@ -82,3 +82,39 @@ func TestGenerateDownMigrationSQL_RestoresTheColumnThePriorDatabaseHeld(t *testi
 	c.Assert(down, qt.Not(qt.Contains), "TYPE BIGINT",
 		qt.Commentf("a rollback naming the forward operand undoes nothing:\n%s", down))
 }
+
+func TestGenerateDownMigrationSQL_RestoresColumnChangeOnSchemaQualifiedTable(t *testing.T) {
+	c := qt.New(t)
+
+	desired := &schemamodel.Database{
+		Tables: []schemamodel.Table{{StructName: "Item", Name: "items", Schema: "public"}},
+		Fields: []schemamodel.Field{
+			{StructName: "Item", Name: "id", Type: "INTEGER", Primary: true},
+			{StructName: "Item", Name: "sku", Type: "VARCHAR(128)"},
+		},
+	}
+	database := &catalog.Database{
+		Tables: []catalog.Table{{
+			Name: "items", Type: "BASE TABLE",
+			Columns: []catalog.Column{
+				{Name: "id", DataType: "integer", IsNullable: "NO", IsPrimaryKey: true},
+				{Name: "sku", DataType: "varchar(64)", IsNullable: "YES"},
+			},
+		}},
+	}
+
+	upDiff := must.Must(schemadiff.CompareWithDialect(t.Context(),
+		desired, database, platform.Postgres, must.Must(builtin.New()),
+	))
+	c.Assert(upDiff.TablesModified, qt.HasLen, 1)
+	c.Assert(upDiff.TablesModified[0].TableName, qt.Equals, "public.items")
+	c.Assert(upDiff.TablesModified[0].ColumnsModified, qt.HasLen, 1)
+
+	down, err := downMigrationSQL(t.Context(), must.Must(builtin.New()),
+		upDiff, desired, database, platform.Postgres, capability.Postgres17())
+	c.Assert(err, qt.IsNil)
+	c.Assert(down, qt.Not(qt.Contains), "-- ERROR:",
+		qt.Commentf("rollback must not emit a missing column definition error:\n%s", down))
+	c.Assert(down, qt.Contains, `ALTER COLUMN "sku" TYPE varchar(64)`,
+		qt.Commentf("rollback must restore the prior column type on schema-qualified table:\n%s", down))
+}

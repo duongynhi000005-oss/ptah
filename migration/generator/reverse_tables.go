@@ -99,7 +99,7 @@ func reverseTableDiffs(tableDiffs []difftypes.TableDiff, prior *schemamodel.Data
 			TableName:       tableDiff.TableName,
 			ColumnsAdded:    clonedColumnChanges(tableDiff.ColumnsRemoved),
 			ColumnsRemoved:  clonedColumnChanges(tableDiff.ColumnsAdded),
-			ColumnsModified: reverseColumnDiffs(tableDiff.ColumnsModified, tableDiff.TableName, prior),
+			ColumnsModified: reverseColumnDiffs(tableDiff.ColumnsModified, tableDiff.TableName, prior, semantics),
 			// The table as the PRE-CHANGE database declared it. A rollback that
 			// rebuilds is rebuilding what that database held, and the forward
 			// declaration describes the state being rolled back from.
@@ -139,6 +139,7 @@ func reverseColumnDiffs(
 	columnDiffs []difftypes.ColumnDiff,
 	tableName string,
 	prior *schemamodel.Database,
+	semantics identifier.Semantics,
 ) []difftypes.ColumnDiff {
 	reversed := make([]difftypes.ColumnDiff, len(columnDiffs))
 	for i, columnDiff := range columnDiffs {
@@ -158,7 +159,7 @@ func reverseColumnDiffs(
 		reversed[i] = difftypes.ColumnDiff{
 			ColumnName: columnDiff.ColumnName,
 			Changes:    reversedChanges,
-			Desired:    priorColumn(prior, tableName, columnDiff.ColumnName),
+			Desired:    priorColumn(prior, tableName, columnDiff.ColumnName, semantics),
 			// The rollback alters the same sequence of the same database,
 			// whose restart is replayed by its ALTER as by the forward one.
 			CurrentSequenceRestart: columnDiff.CurrentSequenceRestart,
@@ -180,26 +181,25 @@ func priorTableDeclaration(prior *schemamodel.Database, tableName string, semant
 	if prior == nil {
 		return schemacapture.TableDeclaration{}
 	}
-	for _, table := range prior.Tables {
-		if table.Name == tableName || table.QualifiedName() == tableName {
-			return schemacapture.DeclareTable(prior, table, semantics)
-		}
+	table := objectlookup.Qualified(prior.Tables, tableName, semantics)
+	if table == nil {
+		return schemacapture.TableDeclaration{}
 	}
-	return schemacapture.TableDeclaration{}
+	return schemacapture.DeclareTable(prior, *table, semantics)
 }
 
-func priorColumn(prior *schemamodel.Database, tableName, columnName string) schemamodel.Field {
+func priorColumn(prior *schemamodel.Database, tableName, columnName string, semantics identifier.Semantics) schemamodel.Field {
 	if prior == nil {
 		return schemamodel.Field{}
 	}
-	for _, table := range prior.Tables {
-		if table.Name != tableName && table.QualifiedName() != tableName {
-			continue
-		}
-		for _, field := range generatedschema.FieldsForTable(prior, table) {
-			if field.Name == columnName {
-				return field.Clone()
-			}
+	table := objectlookup.Qualified(prior.Tables, tableName, semantics)
+	if table == nil {
+		return schemamodel.Field{}
+	}
+	wanted := semantics.ColumnIdentityKey(columnName)
+	for _, field := range generatedschema.FieldsForTable(prior, *table) {
+		if field.Name == columnName || semantics.ColumnIdentityKey(field.Name) == wanted {
+			return field.Clone()
 		}
 	}
 	return schemamodel.Field{}
@@ -255,7 +255,7 @@ func priorTableCreation(prior *schemamodel.Database, name string, semantics iden
 	if prior == nil {
 		return creation
 	}
-	table := objectlookup.Qualified(prior.Tables, name, identifier.Semantics{})
+	table := objectlookup.Qualified(prior.Tables, name, semantics)
 	if table == nil {
 		return creation
 	}
