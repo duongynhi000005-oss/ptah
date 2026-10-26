@@ -8,6 +8,7 @@ import (
 	"ptah.run/core/schemaext"
 	"ptah.run/internal/deporder"
 	"ptah.run/internal/routineargs"
+	"ptah.run/internal/routinebody"
 	"ptah.run/internal/tableref"
 )
 
@@ -43,7 +44,7 @@ func removedRoutineNames(diff *difftypes.SchemaDiff, relation string, ahead rout
 func routineNames(routine difftypes.RoutineChange, relation, schema string) bool {
 	types := append(routineargs.ArgumentTypes(routine.Parameters), resultTypes(routine.Returns)...)
 	return slices.ContainsFunc(types, func(spelled string) bool { return typeNamesRelation(spelled, relation, schema) }) ||
-		sqlStandardBodyReads(routine.Body, relation, schema)
+		sqlStandardBodyReads(routine, relation, schema)
 }
 
 // defaultSchema is the schema an unqualified name of diff resolves in, empty
@@ -270,7 +271,7 @@ func derefText(text *string) string {
 // back.
 func removedRoutineReadsColumn(diff *difftypes.SchemaDiff, table, column string) bool {
 	return removedRoutineMatches(diff, func(routine difftypes.RoutineChange) bool {
-		return sqlStandardBodyReads(routine.Body, table, defaultSchema(diff)) &&
+		return sqlStandardBodyReads(routine, table, defaultSchema(diff)) &&
 			(strings.Contains(routine.Body, "*") || deporder.ReferencesIdentifier(routine.Body, column))
 	})
 }
@@ -284,17 +285,14 @@ func removedRoutineMatches(diff *difftypes.SchemaDiff, match func(difftypes.Rout
 	return false
 }
 
-// sqlStandardBodyReads reports whether body is a SQL-standard routine body,
+// sqlStandardBodyReads reports whether routine has a SQL-standard body,
 // `BEGIN ATOMIC ... END` or `RETURN expression`, that names relation, an
 // unqualified name resolving in schema. The server parses such a body when the
 // routine is created and records what it reads; a body in quotes is a string it
 // records nothing for.
-func sqlStandardBodyReads(body, relation, schema string) bool {
-	head := strings.ToUpper(strings.Join(strings.Fields(body), " "))
-	if !strings.HasPrefix(head, "BEGIN ATOMIC") && !strings.HasPrefix(head, "RETURN ") {
-		return false
-	}
-	return deporder.ReferencesRelation(body, relation, schema)
+func sqlStandardBodyReads(routine difftypes.RoutineChange, relation, schema string) bool {
+	return routinebody.SQLStandard(routine.Language, routine.Body) &&
+		deporder.ReferencesRelation(routine.Body, relation, schema)
 }
 
 // removedTableReads reports whether a captured object of a table the plan
